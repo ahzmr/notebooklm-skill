@@ -7,6 +7,8 @@ Ensures all scripts run with the correct virtual environment
 import os
 import sys
 import subprocess
+import shutil
+import platform
 from pathlib import Path
 
 
@@ -68,6 +70,30 @@ def main():
     # Ensure .py extension
     if not script_name.endswith('.py'):
         script_name += '.py'
+
+    # Auto-select query backend based on Chrome/Chromium availability:
+    # - Chrome/Chromium installed (native Mac/Linux/Windows) → ask_question.py (launches own browser)
+    # - Not found (Docker etc.)                              → ask_cdp.py (connects to host browser via CDP)
+    if script_name == 'ask_question.py':
+        _system = platform.system()
+        if _system == 'Darwin':
+            _chrome_found = Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome').exists()
+        elif _system == 'Windows':
+            _chrome_found = (
+                Path(r'C:\Program Files\Google\Chrome\Application\chrome.exe').exists()
+                or Path(r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe').exists()
+                or bool(shutil.which('chrome'))
+            )
+        else:  # Linux / other Unix
+            _chrome_found = (
+                Path('/opt/google/chrome/chrome').exists()
+                or bool(shutil.which('google-chrome'))
+                or bool(shutil.which('google-chrome-stable'))
+                or bool(shutil.which('chromium'))
+                or bool(shutil.which('chromium-browser'))
+            )
+        if not _chrome_found:
+            script_name = 'ask_cdp.py'
 
     # Get script path
     skill_dir = Path(__file__).parent.parent
