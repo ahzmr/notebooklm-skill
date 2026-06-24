@@ -14,13 +14,19 @@ import re
 import tempfile
 import hashlib
 from pathlib import Path
+from collections import Counter
 from contextlib import contextmanager
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from patchright.sync_api import sync_playwright
-from config import QUERY_INPUT_SELECTORS, RESPONSE_SELECTORS, LIBRARY_FILE
+from config import (
+    QUERY_INPUT_SELECTORS,
+    USER_MESSAGE_SELECTORS,
+    SUBMIT_BUTTON_SELECTORS,
+    LIBRARY_FILE,
+)
 
 FOLLOW_UP_REMINDER = (
     "\n\nEXTREMELY IMPORTANT: Is that ALL you need to know? "
@@ -163,55 +169,152 @@ def ask_notebooklm_cdp(question: str, notebook_url: str, cdp_endpoint: str = CDP
                 page.close()
                 return None
 
-            # Type question
-            print("  ⌨️  Typing question...")
-            query_element.click()
-            time.sleep(0.3)
-            query_element.fill(question)
-            time.sleep(0.5)
+            # 按"用户问题原文"精确定位答案。
+            # 关键背景：改版后 NotebookLM 的聊天消息在 DOM 里【不是按时间顺序排列】的，
+            # 新提交的问答对可能插在历史中间，所以绝不能用"最后一个 DOM 元素"当最新答案。
+            # 每个 .chat-message-pair 内是一问一答，因此唯一可靠的做法是：
+            # 找到 user 气泡文本 == 本次问题的那个 pair，读取它配对的 bot 答案。
+            # 这同时根治两个 bug：
+            #   - 抓不到答案（答案不在 els[-1]）
+            #   - 多会话互串（每个会话只认自己问题原文对应的答案）
+            # 返回"与 q 完全相同的所有 pair 的答案文本列表"（一般只有 1 个；
+            # 历史里若有完全相同的旧问题则可能多个，由调用方用 seen_before 排除）。
+            def _exact_q_answers(q):
+                try:
+                    return page.evaluate(
+                        """(q) => {
+                            const nz = s => (s||'').replace(/\\s+/g,'');
+                            const tq = nz(q);
+                            const out = [];
+                            document.querySelectorAll('.chat-message-pair').forEach(p => {
+                                const u = p.querySelector('.from-user-message-card-content');
+                                if (u && nz(u.innerText) === tq) {
+                                    const a = p.querySelector('.to-user-container .message-text-content');
+                                    out.push(a ? a.innerText.trim() : '');
+                                }
+                            });
+                            return out;
+                        }""",
+                        q,
+                    )
+                except Exception:
+                    return []
 
-            # Submit
-            print("  📤 Submitting...")
-            page.keyboard.press("Enter")
-            time.sleep(1)
+            # 统计当前已提交的"用户问题气泡"数量——提交成功的硬信号。
+            def _count_user_msgs():
+                for selector in USER_MESSAGE_SELECTORS:
+                    try:
+                        els = page.query_selector_all(selector)
+                        if els:
+                            return len(els)
+                    except Exception:
+                        continue
+                return 0
 
-            # Wait for response
+            # 提交前先稍等历史加载，用 Counter 记录历史中与本次问题完全相同的旧答案计数。
+            # Counter 差集（answers_now - answers_before）能精确识别新增的答案，
+            # 即使新答案与旧答案文本完全一样也不会被误过滤。
+            time.sleep(2)
+            answers_before = Counter(a for a in _exact_q_answers(question) if a)
+
+            # =====================================================================
+            # 提交问题：必须确认"用户问题气泡数 +1"才算成功。
+            # 改版后 fresh tab 偶发丢键（输入框带 autocomplete-trigger，Enter 可能被
+            # 补全面板吞掉，或页面尚未完全就绪），仅靠 Enter 会静默失败导致空等超时。
+            # 策略：填入→Enter→确认；未确认则兜底点击提交按钮 / 重新填入再试，最多 3 轮。
+            # =====================================================================
+            user_before = _count_user_msgs()
+            submitted = False
+            for attempt in range(1, 4):
+                print(f"  ⌨️  Typing & submitting (attempt {attempt})...")
+                page.bring_to_front()  # 多标签并发时，确保焦点/键盘事件作用于本标签
+                query_element.click()
+                time.sleep(0.3)
+                # 输入框可能残留上次内容，先清空再填
+                try:
+                    query_element.fill("")
+                except Exception:
+                    pass
+                query_element.fill(question)
+                time.sleep(0.5)
+
+                page.bring_to_front()
+                page.keyboard.press("Enter")
+
+                # 确认提交：等待用户气泡数增加（最多 ~6s）
+                confirm_deadline = time.time() + 6
+                while time.time() < confirm_deadline:
+                    if _count_user_msgs() > user_before:
+                        submitted = True
+                        break
+                    time.sleep(0.5)
+                if submitted:
+                    print("  📤 Submitted (confirmed).")
+                    break
+
+                # Enter 没生效——兜底点击提交按钮（输入框此时通常仍有文本）
+                print("  ⚠️  Enter 未确认提交，尝试点击提交按钮...")
+                clicked = False
+                for btn_sel in SUBMIT_BUTTON_SELECTORS:
+                    try:
+                        btn = page.query_selector(btn_sel)
+                        if btn and btn.is_visible():
+                            btn.click()
+                            clicked = True
+                            break
+                    except Exception:
+                        continue
+                if clicked:
+                    confirm_deadline = time.time() + 6
+                    while time.time() < confirm_deadline:
+                        if _count_user_msgs() > user_before:
+                            submitted = True
+                            break
+                        time.sleep(0.5)
+                if submitted:
+                    print("  📤 Submitted via button (confirmed).")
+                    break
+                # 本轮失败，下一轮重新填入再试
+
+            if not submitted:
+                print("  ❌ 多次尝试仍未能提交问题")
+                page.close()
+                return None
+
+            # =====================================================================
+            # 等待答案：用 Counter 差集找到本次新增的答案，等它稳定。
+            # thinking 占位态（"Processing material…"）以省略号结尾，用 _is_thinking
+            # 识别；但真实答案也可能以省略号结尾，因此不是直接过滤，而是要求更长的
+            # 稳定期（6 次 vs 普通答案 3 次）来区分占位态和真答案。
+            # =====================================================================
             print("  ⏳ Waiting for answer...")
             answer = None
             stable_count = 0
             last_text = None
             deadline = time.time() + 120
 
+            def _is_thinking(t):
+                return t.endswith("...") or t.endswith("…")
+
             while time.time() < deadline:
-                try:
-                    thinking = page.query_selector('div.thinking-message')
-                    if thinking and thinking.is_visible():
-                        time.sleep(1)
-                        continue
-                except Exception:
-                    pass
+                answers_now = Counter(a for a in _exact_q_answers(question) if a)
+                new_answers = list((answers_now - answers_before).elements())
+                non_thinking = [a for a in new_answers if not _is_thinking(a)]
+                text = non_thinking[-1] if non_thinking else (
+                    new_answers[-1] if new_answers else None)
 
-                for selector in RESPONSE_SELECTORS:
-                    try:
-                        elements = page.query_selector_all(selector)
-                        if elements:
-                            latest = elements[-1]
-                            text = latest.inner_text().strip()
-                            if text and len(text) > 20:
-                                if text == last_text:
-                                    stable_count += 1
-                                    if stable_count >= 3:
-                                        answer = text
-                                        break
-                                else:
-                                    stable_count = 0
-                                    last_text = text
-                    except Exception:
-                        continue
+                if text:
+                    if text == last_text:
+                        stable_count += 1
+                        threshold = 6 if _is_thinking(text) else 3
+                        if stable_count >= threshold:
+                            answer = text
+                            break
+                    else:
+                        stable_count = 0
+                        last_text = text
 
-                if answer:
-                    break
-                time.sleep(1)
+                time.sleep(1.5)
 
             page.close()
 

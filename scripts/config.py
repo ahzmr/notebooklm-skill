@@ -27,6 +27,22 @@ RESPONSE_SELECTORS = [
     "[data-message-author='assistant']",
 ]
 
+# 用户已提交问题的气泡（用于"确认问题真的发出去了"）。
+# 改版后提交偶发丢键，必须以"用户消息数增加"作为提交成功的硬信号。
+USER_MESSAGE_SELECTORS = [
+    ".from-user-message-card-content",  # Primary
+    ".from-user-container",
+    "[data-message-author='user']",
+]
+
+# 聊天框提交按钮（Enter 丢键时的兜底点击）。aria-label 随语言变化，逐个尝试。
+SUBMIT_BUTTON_SELECTORS = [
+    "button[aria-label='提交']",
+    "button[aria-label='Submit']",
+    "button[aria-label='Send']",
+    "button[aria-label='发送']",
+]
+
 # Browser Configuration
 BROWSER_ARGS = [
     '--disable-blink-features=AutomationControlled',  # Patches navigator.webdriver

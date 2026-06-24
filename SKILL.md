@@ -5,7 +5,7 @@ description: Use this skill to query your Google NotebookLM notebooks directly f
 
 # NotebookLM Research Assistant Skill
 
-Interact with Google NotebookLM to query documentation with Gemini's source-grounded answers. Each question opens a fresh browser session, retrieves the answer exclusively from your uploaded documents, and closes.
+Interact with Google NotebookLM to query documentation with Gemini's source-grounded answers. Each question runs in an isolated browser session/tab, retrieves the answer exclusively from your uploaded documents, and closes.
 
 ## When to Use This Skill
 
@@ -61,24 +61,35 @@ The `run.py` wrapper automatically:
 
 ### Step 1: Check Environment
 
-`run.py` auto-selects the query backend based on Chrome availability:
+`run.py` auto-selects the query backend by detecting whether a local Chrome is available. **The primary environment is Docker (CDP mode); Mac/native is the secondary fallback.**
 
-| Environment | Chrome installed? | Backend used |
-|-------------|-------------------|--------------|
-| Mac / native Linux | ✅ Yes | `ask_question.py` — launches its own browser, uses saved auth |
-| Docker / container | ❌ No | `ask_cdp.py` — connects to host browser via CDP on `localhost:9222` |
+| Environment | Detected when | Backend | Auth |
+|-------------|---------------|---------|------|
+| **Docker / container (PRIMARY)** | no local Chrome | `ask_cdp.py` — attaches to the **host** browser via CDP on `localhost:9222` | reuses the host browser's logged-in Google session |
+| Mac / native Linux (secondary) | Chrome installed locally | `ask_question.py` — launches its own browser | saved auth via `auth_manager.py` |
 
-**If running in Docker (Chrome not found):** make sure Chrome or Edge is open on the host with remote debugging:
+#### Primary: Docker / container (CDP mode)
+
+In Docker there is no local Chrome, so `run.py` routes every query to `ask_cdp.py`, which attaches to a Chromium-based browser running **on the host** and reuses its Google session — no separate login step is needed.
+
+**Prerequisite — keep a host browser running in the background with remote debugging.** Start it once on the host and leave it running so the skill can attach at any time:
 ```bash
-# On the host Mac terminal:
-open -a "Google Chrome" --args --remote-debugging-port=9222
-```
-Quick check from inside Docker:
-```bash
-curl -s http://localhost:9222/json/version
+# On the host terminal (run once, keep it alive in the background):
+open -a "Microsoft Edge" --args --remote-debugging-port=9222
+# or:  open -a "Google Chrome" --args --remote-debugging-port=9222
 ```
 
-**If running natively (Chrome installed):** check auth status first:
+**Verify the bridge from inside the container before querying:**
+```bash
+curl -s http://localhost:9222/json/version   # should return browser version JSON
+```
+If this returns nothing, the host browser is not running with `--remote-debugging-port=9222` (see Troubleshooting). If it connects but redirects to a Google login, log in manually in the host browser once.
+
+Concurrency: `ask_cdp.py` opens its own tab per query and serializes by notebook (a per-notebook file lock), so multiple notebooks can be queried in parallel while the same notebook stays strictly sequential.
+
+#### Secondary: Mac / native Linux (local browser)
+
+Only when Chrome is installed in the same environment as the skill. `run.py` then uses `ask_question.py`, which launches its own browser using saved auth. Check auth status first:
 ```bash
 python scripts/run.py auth_manager.py status
 # If not authenticated:
@@ -116,7 +127,7 @@ python scripts/run.py notebook_manager.py remove --id notebook-id
 1. Check library: `python scripts/run.py notebook_manager.py list`
 2. Ask question: `python scripts/run.py ask_question.py --question "..." --notebook-id ID`
 
-> `ask_question.py` is automatically redirected to `ask_cdp.py` (CDP mode) by `run.py`.
+> `ask_question.py` is automatically redirected to `ask_cdp.py` (CDP mode) by `run.py` whenever no local Chrome is present (i.e. in Docker).
 
 ### Step 3: Ask Questions
 
@@ -186,7 +197,7 @@ python scripts/run.py cleanup_manager.py --preserve-library # Keep notebooks
 The virtual environment is automatically managed:
 - First run creates `.venv` automatically
 - Dependencies install automatically
-- Chromium browser installs automatically
+- Chromium browser installs automatically (only used by the native/secondary backend)
 - Everything isolated in skill directory
 
 Manual setup (only if automatic fails):
@@ -199,7 +210,7 @@ python -m patchright install chromium
 
 ## Data Storage
 
-All data stored in `~/.claude/skills/notebooklm/data/`:
+All data stored in the skill's `data/` directory (in Docker this is the bind-mounted skill path on the host):
 - `library.json` - Notebook metadata
 - `auth_info.json` - Authentication status
 - `browser_state/` - Browser cookies and session
@@ -226,8 +237,9 @@ User mentions NotebookLM
 Check/Add notebook → python scripts/run.py notebook_manager.py list/add
     ↓
 Ask question → python scripts/run.py ask_question.py --question "..."
-    ↓  run.py auto-detects: Chrome installed? → ask_question.py
-    ↓                        Chrome missing?  → ask_cdp.py (connects to host browser)
+    ↓  run.py auto-detects backend:
+    ↓     Docker (no local Chrome, PRIMARY) → ask_cdp.py → host browser on :9222
+    ↓     Mac/native (Chrome installed)     → ask_question.py → own browser
     ↓
 See "Is that ALL you need?" → Ask follow-ups until complete
     ↓
@@ -238,8 +250,8 @@ Synthesize and respond to user
 
 | Problem | Solution |
 |---------|----------|
-| `curl localhost:9222` returns nothing | Start Chrome/Edge with `--remote-debugging-port=9222` |
-| CDP connects but redirected to Google login | Browser not logged in to Google — log in manually in the open browser |
+| `curl localhost:9222` returns nothing | Start Chrome/Edge on the host with `--remote-debugging-port=9222` (Docker/CDP mode depends on it) |
+| CDP connects but redirected to Google login | Host browser not logged in to Google — log in manually in the open browser |
 | ModuleNotFoundError | Use `run.py` wrapper |
 | Rate limit (50/day) | Wait or switch Google account |
 | Need auth-based launch (no CDP) | Use `ask_question.py` directly: `python scripts/ask_question.py ...` (bypasses redirect) |
@@ -247,15 +259,15 @@ Synthesize and respond to user
 
 ## Best Practices
 
-1. **Always use run.py** - Handles environment automatically and routes to CDP
-2. **Keep Chrome/Edge open** - CDP mode reuses the existing logged-in browser
+1. **Always use run.py** - Handles environment automatically and routes to CDP in Docker
+2. **Keep the host browser running** - In Docker/CDP mode (the primary setup) the skill attaches to the existing logged-in browser on `localhost:9222`; leave it running in the background
 3. **Follow-up questions** - Don't stop at first answer
 4. **Include context** - Each question opens a new tab; include relevant context
 5. **Synthesize answers** - Combine multiple responses before replying to user
 
 ## Limitations
 
-- Requires Chrome/Edge running with `--remote-debugging-port=9222` on the host
+- Requires a Chrome/Edge instance running with `--remote-debugging-port=9222` on the host (Docker/CDP mode)
 - Rate limits on free Google accounts (50 queries/day)
 - Manual upload required (user must add docs to NotebookLM)
 - Browser overhead (few seconds per question)
