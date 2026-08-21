@@ -64,6 +64,12 @@ QUERY_TIMEOUT_SECONDS = 120
 LOCK_TIMEOUT_SECONDS = 300
 PAGE_LOAD_TIMEOUT = 30000
 
+# 本地浏览器模式（ask_question.py）的全局串行锁标识。
+# 所有笔记本共享同一个 Chrome profile 目录（BROWSER_PROFILE_DIR），
+# Chrome 对 profile 是独占的，跨笔记本并行发起会互相冲突，
+# 因此本地模式下无论笔记本是否相同都必须全局串行（CDP 模式不受影响，真并行）。
+NATIVE_GLOBAL_LOCK_KEY = "__notebooklm_native_browser__"
+
 # Follow-up reminder appended to all answers to encourage comprehensive research
 FOLLOW_UP_REMINDER = (
     "\n\nEXTREMELY IMPORTANT: Is that ALL you need to know? "

@@ -157,6 +157,11 @@ for question in "${QUESTIONS[@]}"; do
 done
 ```
 
+This pattern is a sequential batch against a **single** notebook. To ask
+**multiple different notebooks** at once, see "Parallel Queries" in
+`api_reference.md` — use `ask_cdp.py` and fire the calls in parallel instead
+of looping sequentially.
+
 ## Pattern 8: Automated Research Script
 
 ```python

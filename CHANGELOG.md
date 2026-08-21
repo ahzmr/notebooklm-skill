@@ -5,6 +5,21 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.5.0] - 2026-08-21
+
+### Added
+- **Native-mode global lock** (`config.NATIVE_GLOBAL_LOCK_KEY`, wrapped around `ask_question.py`'s per-notebook lock) - makes "callers may always ask in parallel" a uniform contract across both backends: CDP mode runs different notebooks truly in parallel (already stable), while native/local mode now safely auto-serializes *all* queries regardless of notebook, since concurrent launches previously contended for the same shared Chrome profile directory
+
+### Changed
+- **Concurrency docs rewritten as a contract, not a mechanism explanation** (`SKILL.md`) - callers no longer need to reason about locks/queues/hot-tabs themselves; a single table states what happens per mode, plus explicit guidance to fire one background call per notebook when a task spans multiple notebooks
+- **`--notebook-id` promoted to the recommended default** in examples across `SKILL.md`; the active-notebook shortcut (`notebook_manager.py activate`) is now documented as a debugging convenience only, since relying on it is unsafe once calls are fired concurrently
+- **Rebrand acknowledged: NotebookLM is now "Gemini Notebook"** (Google, 2026-07-16) - `SKILL.md` trigger phrases and description now recognize both names and both URL domains (`notebook.google.com` and legacy `notebooklm.google.com`); `README.md`/`README.zh-CN.md` lead with a rebrand callout. The skill's own name, scripts, and folder stay `notebooklm` for backward compatibility — only user-facing docs and triggers changed
+- **README environment docs caught up with CDP mode**: `README.md`/`README.zh-CN.md`'s "Backends" section previously only had a two-row table with no setup detail; it now includes the host-browser launch command, the `curl localhost:9222/json/version` bridge check, and a summary of the parallel/serialize concurrency contract, so a reader doesn't have to open `SKILL.md` just to understand Docker/CDP mode
+- **Compatibility broadened beyond Claude Code**: `README.md`/`README.zh-CN.md` now document that OpenCode (which reads the same `~/.claude/skills/` / `.claude/skills/` paths) also runs this skill; the "Local Claude Code Only" warning is now "Local Use Only" and names both agents
+
+### Fixed
+- **`references/api_reference.md` "Parallel Queries" example** used `ask_question.py` (native mode) to demonstrate concurrent queries across notebooks — this would actually contend on the shared Chrome profile directory and is not safe. Fixed to use `ask_cdp.py`, with a note on when each mode auto-parallelizes vs. auto-serializes
+
 ## [1.4.0] - 2026-08-21
 
 ### Added

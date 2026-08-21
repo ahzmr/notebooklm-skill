@@ -9,19 +9,29 @@
 [![Based on](https://img.shields.io/badge/Based%20on-NotebookLM%20MCP-green.svg)](https://github.com/PleasePrompto/notebooklm-mcp)
 [![GitHub](https://img.shields.io/github/stars/PleasePrompto/notebooklm-skill?style=social)](https://github.com/PleasePrompto/notebooklm-skill)
 
-> Use this skill to query your Google NotebookLM notebooks directly from Claude Code for source-grounded, citation-backed answers from Gemini. Browser automation, library management, persistent auth. Drastically reduced hallucinations - answers only from your uploaded documents.
+> Use this skill to query your Google NotebookLM (now rebranded "Gemini Notebook") notebooks directly from Claude Code, OpenCode, or any other tool that supports the Agent Skills format, for source-grounded, citation-backed answers from Gemini. Browser automation, library management, persistent auth. Drastically reduced hallucinations - answers only from your uploaded documents.
 
 [Installation](#installation) • [Quick Start](#quick-start) • [Why NotebookLM](#why-notebooklm-not-local-rag) • [How It Works](#how-it-works) • [MCP Alternative](https://github.com/PleasePrompto/notebooklm-mcp)
+
+[中文文档](./README.zh-CN.md)
 
 </div>
 
 ---
 
-## ⚠️ Important: Local Claude Code Only
+## 📣 NotebookLM Is Now Gemini Notebook
 
-**This skill works ONLY with local [Claude Code](https://github.com/anthropics/claude-code) installations, NOT in the web UI.**
+On **July 16, 2026**, Google renamed NotebookLM to **Gemini Notebook** — same product, same notebooks, same sources, same shareable links, just a new name under the Gemini umbrella (existing `notebooklm.google.com` links keep working via redirect, alongside the new `notebook.google.com` domain). Rebranded, same great product.
 
-The web UI runs skills in a sandbox without network access, which this skill requires for browser automation. You must use [Claude Code](https://github.com/anthropics/claude-code) locally on your machine.
+This skill keeps its original `notebooklm` name for its scripts, folder, and skill identifier (renaming those would break existing installs and library files), and transparently handles URLs from **both** domains — nothing changes for you. The docs below still say "NotebookLM" throughout for that reason; read it as "NotebookLM / Gemini Notebook" wherever it appears.
+
+---
+
+## ⚠️ Important: Local Use Only (Claude Code, OpenCode, ...)
+
+**This skill works ONLY with local, network-capable coding agents that support the Agent Skills format — confirmed working with [Claude Code](https://github.com/anthropics/claude-code) and [OpenCode](https://opencode.ai/) (which reads the same `~/.claude/skills/` and `.claude/skills/` paths) — NOT in the Claude.ai web UI.**
+
+The web UI runs skills in a sandbox without network access, which this skill requires for browser automation. You must run a local agent like Claude Code or OpenCode on your own machine.
 
 ---
 
@@ -108,6 +118,8 @@ Claude will list your available skills including NotebookLM.
 ```
 *A Chrome window opens → log in with your Google account*
 
+> In Docker/CDP mode this step isn't needed — the skill reuses whatever Google session is already logged into the host browser instead. See [Backends](#backends-local-browser-vs-cdp-docker) below.
+
 ### 3. Create your knowledge base
 
 Go to [notebooklm.google.com](https://notebooklm.google.com) → Create notebook → Upload your docs:
@@ -153,7 +165,7 @@ This is a **Claude Code Skill** - a local folder containing instructions and scr
 | **Protocol** | Claude Skills | Model Context Protocol |
 | **Installation** | Clone to `~/.claude/skills` | `claude mcp add ...` |
 | **Sessions** | Fresh browser each question | Persistent chat sessions |
-| **Compatibility** | Claude Code only (local) | Claude Code, Codex, Cursor, etc. |
+| **Compatibility** | Claude Code, OpenCode (local only) | Claude Code, Codex, Cursor, etc. |
 | **Language** | Python | TypeScript |
 | **Distribution** | Git clone | npm package |
 
@@ -260,9 +272,24 @@ Note: The MCP server uses the same Patchright library but via TypeScript/npm eco
 | Environment | Backend | How |
 |-------------|---------|-----|
 | Chrome/Chromium installed locally (Mac, native Linux) | `ask_question.py` | Launches its own persistent browser with saved auth |
-| No local Chrome (e.g. a Docker container) | `ask_cdp.py` | Connects via Chrome DevTools Protocol to a browser already running on the **host** (`--remote-debugging-port=9222`), reusing its logged-in Google session |
+| No local Chrome (e.g. a Docker container) — **primary supported setup** | `ask_cdp.py` | Connects via Chrome DevTools Protocol to a browser already running on the **host** (`--remote-debugging-port=9222`), reusing its logged-in Google session |
 
-See `SKILL.md` for the exact Docker/CDP setup steps and troubleshooting.
+**Running in Docker/CDP mode:** keep a Chromium-based browser running on the host with remote debugging enabled, and leave it open in the background:
+
+```bash
+# On the host (run once, keep it alive in the background):
+open -a "Microsoft Edge" --args --remote-debugging-port=9222
+# or:  open -a "Google Chrome" --args --remote-debugging-port=9222
+
+# From inside the container, verify the bridge is reachable:
+curl -s http://localhost:9222/json/version   # should return browser version JSON
+```
+
+No separate authentication step is needed in CDP mode — it just reuses whatever Google session is already logged in on the host browser.
+
+**Concurrency:** callers can always fire off multiple questions in parallel — the implementation decides whether to actually run them concurrently or queue them. CDP mode runs queries against *different* notebooks truly in parallel and auto-queues queries against the *same* notebook (with hot-tab handoff); native/local mode auto-serializes everything globally, since every query there shares one browser profile directory.
+
+See `SKILL.md` for the exact Docker/CDP setup steps, troubleshooting, and the full concurrency contract.
 
 ### Dependencies
 - **patchright==1.55.2**: Browser automation
@@ -308,7 +335,7 @@ For multi-step research, Claude automatically asks follow-up questions when need
 ## Limitations
 
 ### Skill-Specific
-- **Local Claude Code only** - Does not work in web UI (sandbox restrictions)
+- **Local agents only** (Claude Code, OpenCode, ...) - Does not work in web UI (sandbox restrictions)
 - **No session persistence** - Each question is independent
 - **No follow-up context** - Can't reference "the previous answer"
 

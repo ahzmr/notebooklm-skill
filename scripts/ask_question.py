@@ -25,6 +25,7 @@ from config import (
     FOLLOW_UP_REMINDER,
     resolve_notebook_url,
     DEFAULT_CDP_ENDPOINT,
+    NATIVE_GLOBAL_LOCK_KEY,
 )
 from concurrency import (
     notebook_lock,
@@ -64,8 +65,12 @@ def ask_notebooklm(
     driver = NotebookLMDriver()
 
     try:
-        # 使用按笔记本粒度的文件锁，防止本地多进程争抢 profile 或互相干扰
-        with notebook_lock(notebook_url, timeout=LOCK_TIMEOUT_SECONDS):
+        # 外层全局锁：本地模式下所有笔记本共享同一个浏览器 profile 目录，
+        # 跨笔记本并行发起会互相冲突，因此先全局串行排队。
+        # 内层按笔记本粒度的锁：与 CDP 模式保持一致的语义（此处实际上总是
+        # 排在全局锁之后拿到，不会有竞争，只是为了逻辑统一）。
+        with notebook_lock(NATIVE_GLOBAL_LOCK_KEY, timeout=LOCK_TIMEOUT_SECONDS), \
+             notebook_lock(notebook_url, timeout=LOCK_TIMEOUT_SECONDS):
             playwright = sync_playwright().start()
 
             # 启动持久化上下文

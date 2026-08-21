@@ -241,19 +241,27 @@ Solutions:
 
 ### Parallel Queries
 
+Callers can always fire off multiple questions in parallel — the implementation
+decides internally whether to actually run them concurrently or queue them:
+in CDP mode, different notebooks run truly in parallel while queries against
+the *same* notebook are auto-queued and serialized (no need to dedupe or add
+`sleep` yourself); native/local browser mode auto-serializes everything
+globally (shared Chrome profile, not yet adapted for parallelism), so use
+`ask_cdp.py` — not `ask_question.py` — when you actually want concurrency.
+
 ```python
 import concurrent.futures
 import subprocess
 
 def query(question, notebook_id):
     result = subprocess.run([
-        "python", "scripts/run.py", "ask_question.py",
+        "python", "scripts/run.py", "ask_cdp.py",
         "--question", question,
         "--notebook-id", notebook_id
     ], capture_output=True, text=True)
     return result.stdout
 
-# Run multiple queries simultaneously
+# Run multiple queries simultaneously (safe across different notebooks in CDP mode)
 with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
     futures = [
         executor.submit(query, q, nb)

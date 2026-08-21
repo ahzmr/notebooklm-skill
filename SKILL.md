@@ -1,20 +1,20 @@
 ---
 name: notebooklm
-description: Use this skill to query your Google NotebookLM notebooks directly from Claude Code for source-grounded, citation-backed answers from Gemini. Browser automation, library management, persistent auth. Drastically reduced hallucinations through document-only responses.
+description: Use this skill to query your Google NotebookLM (now rebranded "Gemini Notebook") notebooks directly from Claude Code, OpenCode, or any other Agent Skills-compatible tool, for source-grounded, citation-backed answers from Gemini. Browser automation, library management, persistent auth. Drastically reduced hallucinations through document-only responses.
 ---
 
 # NotebookLM Research Assistant Skill
 
-Interact with Google NotebookLM to query documentation with Gemini's source-grounded answers. Each question runs in an isolated browser session/tab, retrieves the answer exclusively from your uploaded documents, and closes.
+Interact with Google NotebookLM — renamed "Gemini Notebook" by Google on 2026-07-16, same product and URLs, new name — to query documentation with Gemini's source-grounded answers. Each question runs in an isolated browser session/tab, retrieves the answer exclusively from your uploaded documents, and closes.
 
 ## When to Use This Skill
 
 Trigger when user:
-- Mentions NotebookLM explicitly
-- Shares NotebookLM URL (`https://notebooklm.google.com/notebook/...`)
+- Mentions NotebookLM or Gemini Notebook explicitly (either name — same product)
+- Shares a notebook URL (`https://notebook.google.com/notebook/...` or the legacy `https://notebooklm.google.com/notebook/...`)
 - Asks to query their notebooks/documentation
 - Wants to add documentation to NotebookLM library
-- Uses phrases like "ask my NotebookLM", "check my docs", "query my notebook"
+- Uses phrases like "ask my NotebookLM", "ask my Gemini Notebook", "check my docs", "query my notebook"
 
 ## ⚠️ CRITICAL: Add Command - Smart Discovery
 
@@ -85,8 +85,6 @@ curl -s http://localhost:9222/json/version   # should return browser version JSO
 ```
 If this returns nothing, the host browser is not running with `--remote-debugging-port=9222` (see Troubleshooting). If it connects but redirects to a Google login, log in manually in the host browser once.
 
-Concurrency: `ask_cdp.py` keeps one dedicated tab per notebook (tagged via `window.name`) instead of opening a fresh tab every time. A per-notebook file lock fully serializes queries against the *same* notebook (they share one chat context), while different notebooks run truly in parallel — separate locks, separate tabs, same host browser. When a query finishes it checks a directory-based queue: if another process is already waiting on that notebook, the tab is left open for instant reuse (hot session); otherwise it closes the tab itself.
-
 #### Secondary: Mac / native Linux (local browser)
 
 Only when Chrome is installed in the same environment as the skill. `run.py` then uses `ask_question.py`, which launches its own browser using saved auth. Check auth status first:
@@ -95,8 +93,6 @@ python scripts/run.py auth_manager.py status
 # If not authenticated:
 python scripts/run.py auth_manager.py setup
 ```
-
-Concurrency: `ask_question.py` also uses the same per-notebook file lock, so queries against the *same* notebook are safely serialized. Unlike CDP mode, though, every query launches its own browser process against one shared Chrome profile directory — so concurrent queries to *different* notebooks can still contend for that profile. Treat native mode as effectively one query at a time regardless of notebook.
 
 ### Step 2: Manage Notebook Library
 
@@ -118,7 +114,9 @@ python scripts/run.py notebook_manager.py add \
 # Search notebooks by topic
 python scripts/run.py notebook_manager.py search --query "keyword"
 
-# Set active notebook
+# Set active notebook (debugging convenience only — always pass --notebook-id
+# explicitly instead of relying on this, especially when asking multiple
+# notebooks concurrently; see "Concurrency" below)
 python scripts/run.py notebook_manager.py activate --id notebook-id
 
 # Remove notebook
@@ -134,18 +132,41 @@ python scripts/run.py notebook_manager.py remove --id notebook-id
 ### Step 3: Ask Questions
 
 ```bash
-# Basic query (uses active notebook if set)
-python scripts/run.py ask_question.py --question "Your question here"
-
-# Query specific notebook
+# Recommended: always specify --notebook-id explicitly
 python scripts/run.py ask_question.py --question "..." --notebook-id notebook-id
 
 # Query with notebook URL directly
 python scripts/run.py ask_question.py --question "..." --notebook-url "https://..."
 
+# Basic query (uses active notebook if set) — debugging convenience only,
+# avoid this form when asking multiple notebooks concurrently
+python scripts/run.py ask_question.py --question "Your question here"
+
 # Custom CDP endpoint (if browser is not on localhost:9222)
 python scripts/run.py ask_cdp.py --question "..." --notebook-id ID --cdp-endpoint "http://HOST:9222"
 ```
+
+### Concurrency: You Can Always Ask in Parallel
+
+The contract is simple: **callers may always fire off multiple questions in parallel — the implementation decides internally whether to actually run them concurrently or queue them.**
+
+| Situation | What actually happens |
+|-----------|------------------------|
+| CDP mode + different notebooks | Runs truly in parallel (verified stable) |
+| CDP mode + same notebook | Auto-queued and serialized, with hot-tab handoff to the next waiter |
+| Native/local browser mode | Everything is auto-serialized globally (shared Chrome profile — not yet adapted for parallelism) |
+
+**When a task spans multiple notebooks** (cross-notebook research, comparing notebooks, etc.), proactively fire one background call per notebook instead of asking sequentially:
+
+```bash
+# Fire all notebooks in parallel, each logging to its own file
+python scripts/run.py ask_cdp.py --question "Q1..." --notebook-id "notebook-a" > /tmp/nb_a.log 2>&1 &
+python scripts/run.py ask_cdp.py --question "Q2..." --notebook-id "notebook-b" > /tmp/nb_b.log 2>&1 &
+wait
+# Then read each log and synthesize
+```
+
+Multiple questions to the *same* notebook don't need any special handling either — fire them the same way; the lock queues them automatically. Always pass `--notebook-id` (or `--notebook-url`) explicitly rather than relying on the active notebook, so parallel calls can't be confused about which notebook they belong to.
 
 ## Follow-Up Mechanism (CRITICAL)
 
@@ -238,7 +259,7 @@ User mentions NotebookLM
     ↓
 Check/Add notebook → python scripts/run.py notebook_manager.py list/add
     ↓
-Ask question → python scripts/run.py ask_question.py --question "..."
+Ask question → python scripts/run.py ask_question.py --question "..." --notebook-id ID
     ↓  run.py auto-detects backend:
     ↓     Docker (no local Chrome, PRIMARY) → ask_cdp.py → host browser on :9222
     ↓     Mac/native (Chrome installed)     → ask_question.py → own browser
@@ -263,9 +284,11 @@ Synthesize and respond to user
 
 1. **Always use run.py** - Handles environment automatically and routes to CDP in Docker
 2. **Keep the host browser running** - In Docker/CDP mode (the primary setup) the skill attaches to the existing logged-in browser on `localhost:9222`; leave it running in the background
-3. **Follow-up questions** - Don't stop at first answer
-4. **Include context** - Each question opens a new tab; include relevant context
-5. **Synthesize answers** - Combine multiple responses before replying to user
+3. **Always specify --notebook-id** - Don't rely on the implicit active notebook, especially when asking multiple notebooks concurrently
+4. **Parallelize across notebooks** - When a task spans multiple notebooks, fire one background call per notebook instead of asking sequentially (see "Concurrency" above)
+5. **Follow-up questions** - Don't stop at first answer
+6. **Include context** - Each question opens a new tab; include relevant context
+7. **Synthesize answers** - Combine multiple responses before replying to user
 
 ## Limitations
 
