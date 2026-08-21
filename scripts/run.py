@@ -77,7 +77,13 @@ def main():
     if script_name == 'ask_question.py':
         _system = platform.system()
         if _system == 'Darwin':
-            _chrome_found = Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome').exists()
+            _chrome_found = (
+                Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome').exists()
+                or Path('/Applications/Chromium.app/Contents/MacOS/Chromium').exists()
+                or Path('/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge').exists()
+                or bool(shutil.which('google-chrome'))
+                or bool(shutil.which('chromium'))
+            )
         elif _system == 'Windows':
             _chrome_found = (
                 Path(r'C:\Program Files\Google\Chrome\Application\chrome.exe').exists()
@@ -93,6 +99,8 @@ def main():
                 or bool(shutil.which('chromium-browser'))
             )
         if not _chrome_found:
+            print("⚙️  未检测到 Chrome/Chromium — 自动切换到 CDP 模式 (ask_cdp.py)")
+            print("   请确保宿主浏览器已以 --remote-debugging-port=9222 启动。")
             script_name = 'ask_cdp.py'
 
     # Get script path
@@ -112,7 +120,13 @@ def main():
     # Build command
     cmd = [str(venv_python), str(script_path)] + script_args
 
-    # Run the script
+    # Run the script: On Unix, replace current process directly so PID and signals map 1:1
+    if os.name != 'nt':
+        try:
+            os.execv(str(venv_python), cmd)
+        except Exception:
+            pass  # Fallback to subprocess if execv fails
+
     try:
         result = subprocess.run(cmd)
         sys.exit(result.returncode)
