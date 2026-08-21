@@ -25,8 +25,46 @@ def get_venv_python():
     return venv_python
 
 
-def ensure_venv():
-    """Ensure virtual environment exists"""
+def detect_local_chrome() -> bool:
+    """Detect whether a local Chrome/Chromium/Edge is available on this host.
+
+    Used both to pick the query backend (ask_question.py vs ask_cdp.py) and to
+    decide whether first-time setup needs to install a browser at all — CDP
+    mode connects to the host's browser and never launches its own.
+    """
+    _system = platform.system()
+    if _system == 'Darwin':
+        return (
+            Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome').exists()
+            or Path('/Applications/Chromium.app/Contents/MacOS/Chromium').exists()
+            or Path('/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge').exists()
+            or bool(shutil.which('google-chrome'))
+            or bool(shutil.which('chromium'))
+        )
+    elif _system == 'Windows':
+        return (
+            Path(r'C:\Program Files\Google\Chrome\Application\chrome.exe').exists()
+            or Path(r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe').exists()
+            or bool(shutil.which('chrome'))
+        )
+    else:  # Linux / other Unix
+        return (
+            Path('/opt/google/chrome/chrome').exists()
+            or bool(shutil.which('google-chrome'))
+            or bool(shutil.which('google-chrome-stable'))
+            or bool(shutil.which('chromium'))
+            or bool(shutil.which('chromium-browser'))
+        )
+
+
+def ensure_venv(install_browser: bool = True):
+    """Ensure virtual environment exists.
+
+    install_browser: whether first-time setup should install a local Chrome for
+    Patchright. Pass False when CDP mode will be used (no local Chrome found) —
+    that backend never launches its own browser, so installing one is wasted
+    work and can fail needlessly in restricted containers.
+    """
     skill_dir = Path(__file__).parent.parent
     venv_dir = skill_dir / ".venv"
     setup_script = skill_dir / "scripts" / "setup_environment.py"
@@ -37,7 +75,10 @@ def ensure_venv():
         print("   This may take a minute...")
 
         # Run setup with system Python
-        result = subprocess.run([sys.executable, str(setup_script)])
+        cmd = [sys.executable, str(setup_script)]
+        if not install_browser:
+            cmd.append('--skip-browser-install')
+        result = subprocess.run(cmd)
         if result.returncode != 0:
             print("❌ Failed to set up environment")
             sys.exit(1)
@@ -71,37 +112,17 @@ def main():
     if not script_name.endswith('.py'):
         script_name += '.py'
 
+    # Detect once up front: drives both backend selection and first-time setup
+    # (CDP mode never launches its own browser, so setup can skip installing one).
+    chrome_found = detect_local_chrome()
+
     # Auto-select query backend based on Chrome/Chromium availability:
     # - Chrome/Chromium installed (native Mac/Linux/Windows) → ask_question.py (launches own browser)
     # - Not found (Docker etc.)                              → ask_cdp.py (connects to host browser via CDP)
-    if script_name == 'ask_question.py':
-        _system = platform.system()
-        if _system == 'Darwin':
-            _chrome_found = (
-                Path('/Applications/Google Chrome.app/Contents/MacOS/Google Chrome').exists()
-                or Path('/Applications/Chromium.app/Contents/MacOS/Chromium').exists()
-                or Path('/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge').exists()
-                or bool(shutil.which('google-chrome'))
-                or bool(shutil.which('chromium'))
-            )
-        elif _system == 'Windows':
-            _chrome_found = (
-                Path(r'C:\Program Files\Google\Chrome\Application\chrome.exe').exists()
-                or Path(r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe').exists()
-                or bool(shutil.which('chrome'))
-            )
-        else:  # Linux / other Unix
-            _chrome_found = (
-                Path('/opt/google/chrome/chrome').exists()
-                or bool(shutil.which('google-chrome'))
-                or bool(shutil.which('google-chrome-stable'))
-                or bool(shutil.which('chromium'))
-                or bool(shutil.which('chromium-browser'))
-            )
-        if not _chrome_found:
-            print("⚙️  未检测到 Chrome/Chromium — 自动切换到 CDP 模式 (ask_cdp.py)")
-            print("   请确保宿主浏览器已以 --remote-debugging-port=9222 启动。")
-            script_name = 'ask_cdp.py'
+    if script_name == 'ask_question.py' and not chrome_found:
+        print("⚙️  未检测到 Chrome/Chromium — 自动切换到 CDP 模式 (ask_cdp.py)")
+        print("   请确保宿主浏览器已以 --remote-debugging-port=9222 启动。")
+        script_name = 'ask_cdp.py'
 
     # Get script path
     skill_dir = Path(__file__).parent.parent
@@ -115,7 +136,7 @@ def main():
         sys.exit(1)
 
     # Ensure venv exists and get Python executable
-    venv_python = ensure_venv()
+    venv_python = ensure_venv(install_browser=chrome_found)
 
     # Build command
     cmd = [str(venv_python), str(script_path)] + script_args

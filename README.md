@@ -253,6 +253,17 @@ Uses realistic typing speeds and interaction patterns to avoid detection.
 
 Note: The MCP server uses the same Patchright library but via TypeScript/npm ecosystem.
 
+### Backends: Local Browser vs. CDP (Docker)
+
+`run.py` auto-detects the environment and picks a backend — no manual configuration needed:
+
+| Environment | Backend | How |
+|-------------|---------|-----|
+| Chrome/Chromium installed locally (Mac, native Linux) | `ask_question.py` | Launches its own persistent browser with saved auth |
+| No local Chrome (e.g. a Docker container) | `ask_cdp.py` | Connects via Chrome DevTools Protocol to a browser already running on the **host** (`--remote-debugging-port=9222`), reusing its logged-in Google session |
+
+See `SKILL.md` for the exact Docker/CDP setup steps and troubleshooting.
+
 ### Dependencies
 - **patchright==1.55.2**: Browser automation
 - **python-dotenv==1.0.0**: Environment configuration
@@ -287,6 +298,8 @@ This means:
 - Each question is independent
 - But your notebook library persists
 - **Follow-up mechanism**: Each answer includes "Is that ALL you need to know?" to prompt Claude to ask comprehensive follow-ups
+
+In CDP mode, the browser tab may briefly stay open after a question if another query for the *same* notebook is already queued up (so it can be reused instantly instead of reopened) — but from Claude's side, each question is still asked and answered independently.
 
 For multi-step research, Claude automatically asks follow-up questions when needed.
 

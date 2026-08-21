@@ -85,7 +85,7 @@ curl -s http://localhost:9222/json/version   # should return browser version JSO
 ```
 If this returns nothing, the host browser is not running with `--remote-debugging-port=9222` (see Troubleshooting). If it connects but redirects to a Google login, log in manually in the host browser once.
 
-Concurrency: `ask_cdp.py` opens its own tab per query and serializes by notebook (a per-notebook file lock), so multiple notebooks can be queried in parallel while the same notebook stays strictly sequential.
+Concurrency: `ask_cdp.py` keeps one dedicated tab per notebook (tagged via `window.name`) instead of opening a fresh tab every time. A per-notebook file lock fully serializes queries against the *same* notebook (they share one chat context), while different notebooks run truly in parallel — separate locks, separate tabs, same host browser. When a query finishes it checks a directory-based queue: if another process is already waiting on that notebook, the tab is left open for instant reuse (hot session); otherwise it closes the tab itself.
 
 #### Secondary: Mac / native Linux (local browser)
 
@@ -95,6 +95,8 @@ python scripts/run.py auth_manager.py status
 # If not authenticated:
 python scripts/run.py auth_manager.py setup
 ```
+
+Concurrency: `ask_question.py` also uses the same per-notebook file lock, so queries against the *same* notebook are safely serialized. Unlike CDP mode, though, every query launches its own browser process against one shared Chrome profile directory — so concurrent queries to *different* notebooks can still contend for that profile. Treat native mode as effectively one query at a time regardless of notebook.
 
 ### Step 2: Manage Notebook Library
 
@@ -197,7 +199,7 @@ python scripts/run.py cleanup_manager.py --preserve-library # Keep notebooks
 The virtual environment is automatically managed:
 - First run creates `.venv` automatically
 - Dependencies install automatically
-- Chromium browser installs automatically (only used by the native/secondary backend)
+- Chrome installs automatically for the native/secondary backend — skipped entirely on first run if no local Chrome is found, since CDP mode then connects to the host browser instead
 - Everything isolated in skill directory
 
 Manual setup (only if automatic fails):

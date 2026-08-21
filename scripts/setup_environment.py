@@ -28,8 +28,14 @@ class SkillEnvironment:
             self.venv_python = self.venv_dir / "bin" / "python"
             self.venv_pip = self.venv_dir / "bin" / "pip"
 
-    def ensure_venv(self) -> bool:
-        """Ensure virtual environment exists and is set up"""
+    def ensure_venv(self, install_browser: bool = True) -> bool:
+        """Ensure virtual environment exists and is set up.
+
+        install_browser: whether to install a local Chrome for Patchright.
+        Pass False when CDP mode will be used instead — it connects to the
+        host's own browser and never launches one, so installing Chrome here
+        is wasted work (and can fail needlessly in restricted containers).
+        """
 
         # Check if we're already in the correct venv
         if self.is_in_skill_venv():
@@ -67,22 +73,26 @@ class SkillEnvironment:
                 )
                 print("✅ Dependencies installed")
 
-                # Install Chrome for Patchright (not Chromium!)
-                # Using real Chrome ensures cross-platform reliability and consistent browser fingerprinting
-                # See: https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python#anti-detection
-                print("🌐 Installing Google Chrome for Patchright...")
-                try:
-                    subprocess.run(
-                        [str(self.venv_python), "-m", "patchright", "install", "chrome"],
-                        check=True,
-                        capture_output=True,
-                        text=True
-                    )
-                    print("✅ Chrome installed")
-                except subprocess.CalledProcessError as e:
-                    print(f"⚠️ Warning: Failed to install Chrome: {e}")
-                    print("   You may need to run manually: python -m patchright install chrome")
-                    print("   Chrome is required (not Chromium) for reliability!")
+                if install_browser:
+                    # Install Chrome for Patchright (not Chromium!)
+                    # Using real Chrome ensures cross-platform reliability and consistent browser fingerprinting
+                    # See: https://github.com/Kaliiiiiiiiii-Vinyzu/patchright-python#anti-detection
+                    print("🌐 Installing Google Chrome for Patchright...")
+                    try:
+                        subprocess.run(
+                            [str(self.venv_python), "-m", "patchright", "install", "chrome"],
+                            check=True,
+                            capture_output=True,
+                            text=True
+                        )
+                        print("✅ Chrome installed")
+                    except subprocess.CalledProcessError as e:
+                        print(f"⚠️ Warning: Failed to install Chrome: {e}")
+                        print("   You may need to run manually: python -m patchright install chrome")
+                        print("   Chrome is required (not Chromium) for reliability!")
+                else:
+                    print("⏭️  Skipping local Chrome install — CDP mode will be used")
+                    print("   (connects to a host browser via --remote-debugging-port=9222 instead)")
 
                 return True
             except subprocess.CalledProcessError as e:
@@ -165,6 +175,12 @@ def main():
     )
 
     parser.add_argument(
+        '--skip-browser-install',
+        action='store_true',
+        help='Skip installing a local Chrome for Patchright (use when CDP mode will connect to a host browser instead)'
+    )
+
+    parser.add_argument(
         'args',
         nargs='*',
         help='Arguments to pass to the script'
@@ -189,7 +205,7 @@ def main():
         return env.run_script(args.run, args.args)
 
     # Default: ensure environment is set up
-    if env.ensure_venv():
+    if env.ensure_venv(install_browser=not args.skip_browser_install):
         print("\n✅ Environment ready!")
         print(f"   Virtual env: {env.venv_dir}")
         print(f"   Python: {env.get_python_executable()}")

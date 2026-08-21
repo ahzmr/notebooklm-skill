@@ -57,7 +57,55 @@ BROWSER_ARGS = [
 
 USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
 
-# Timeouts
+# Timeouts & Endpoints
+DEFAULT_CDP_ENDPOINT = "http://localhost:9222"
 LOGIN_TIMEOUT_MINUTES = 10
 QUERY_TIMEOUT_SECONDS = 120
+LOCK_TIMEOUT_SECONDS = 300
 PAGE_LOAD_TIMEOUT = 30000
+
+# Follow-up reminder appended to all answers to encourage comprehensive research
+FOLLOW_UP_REMINDER = (
+    "\n\nEXTREMELY IMPORTANT: Is that ALL you need to know? "
+    "You can always ask another question! Think about it carefully: "
+    "before you reply to the user, review their original request and this answer. "
+    "If anything is still unclear or missing, ask me another comprehensive question "
+    "that includes all necessary context (since each question opens a new browser session)."
+)
+
+
+def resolve_notebook_url(notebook_id: str = None, notebook_url: str = None) -> str:
+    """
+    统一解析 Notebook URL：
+    1. 若已提供 notebook_url，直接返回；
+    2. 若提供 notebook_id，在 library.json 中查找；
+    3. 若均未提供，查找当前 active notebook 的 URL；
+    4. 未找到返回 None。
+    """
+    if notebook_url:
+        return notebook_url
+
+    if not LIBRARY_FILE.exists():
+        return None
+
+    try:
+        import json
+        with open(LIBRARY_FILE, 'r', encoding='utf-8') as f:
+            library = json.load(f)
+        notebooks = library.get('notebooks', {})
+        target_id = notebook_id or library.get('active_notebook_id')
+        if not target_id:
+            return None
+
+        if isinstance(notebooks, dict):
+            nb = notebooks.get(target_id)
+            if nb:
+                return nb.get('url')
+        elif isinstance(notebooks, list):
+            for nb in notebooks:
+                if nb.get('id') == target_id:
+                    return nb.get('url')
+    except Exception as e:
+        print(f"⚠️ 解析 library.json 失败: {e}")
+
+    return None
